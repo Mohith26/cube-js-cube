@@ -1,0 +1,57 @@
+name: Yarn 1 vs 4 install benchmark (temporary)
+on:
+  push:
+    branches:
+      - 'ovr/yarn4-bench'
+
+jobs:
+  bench:
+    name: ${{ matrix.pm }} #${{ matrix.attempt }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        pm: [yarn1, yarn4]
+        attempt: [1, 2, 3, 4, 5]
+    env:
+      CUBESTORE_SKIP_POST_INSTALL: true
+      PM: ${{ matrix.pm }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # yarn1 = the merge base with master, yarn4 = this branch
+          ref: ${{ matrix.pm == 'yarn1' && '0ef0e628f7e60de3aa116e0b28d064568146ac33' || github.sha }}
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: '.nvmrc'
+      - name: Benchmark
+        shell: bash
+        run: |
+          set -euo pipefail
+          export YARN_CACHE_FOLDER="$RUNNER_TEMP/y1cache" YARN_GLOBAL_FOLDER="$RUNNER_TEMP/y4global"
+          if [ "$PM" = yarn1 ]; then
+            CACHE="$YARN_CACHE_FOLDER"
+            noscripts() { yarn install --frozen-lockfile --ignore-scripts --network-timeout 600000; }
+            full() { yarn install --frozen-lockfile --network-timeout 600000; }
+          else
+            CACHE="$YARN_GLOBAL_FOLDER/cache"
+            noscripts() { yarn install --immutable --mode=skip-build; }
+            full() { yarn install --immutable; }
+          fi
+          echo "yarn $(yarn --version), node $(node --version), $(nproc) cpus"
+          clean() { find . -name node_modules -type d -prune -exec rm -rf {} +; rm -f .yarn/install-state.gz; }
+          t() { local s=$(date +%s.%N); "$@" > "$RUNNER_TEMP/last.log" 2>&1 || { tail -50 "$RUNNER_TEMP/last.log"; exit 1; }; awk "BEGIN{printf \"%.1f\", $(date +%s.%N) - $s}"; }
+          r() { echo "BENCH $PM $1 $2" | tee -a "$GITHUB_STEP_SUMMARY"; }
+          clean; r cold "$(t noscripts)"
+          for i in 1 2 3; do clean; r warm "$(t noscripts)"; done
+          for i in 1 2 3; do r noop "$(t noscripts)"; done
+          clean; r warm-full "$(t full)"
+          r cache-mb "$(du -sm "$CACHE" | cut -f1)"
+          r cache-files "$(find "$CACHE" -type f | wc -l)"
+          r node-modules-mb "$(du -sm node_modules | cut -f1)"
+          # The same archive format actions/cache uses (tar + zstd -T0 --long=30)
+          s=$(date +%s.%N); tar -cf - -C "$(dirname "$CACHE")" "$(basename "$CACHE")" | zstd -T0 --long=30 -q -o "$RUNNER_TEMP/cache.tzst"; r archive-create "$(awk "BEGIN{printf \"%.1f\", $(date +%s.%N) - $s}")"
+          r archive-mb "$(du -sm "$RUNNER_TEMP/cache.tzst" | cut -f1)"
+          rm -rf "$CACHE"; mkdir -p "$RUNNER_TEMP/x"
+          s=$(date +%s.%N); zstd -d --long=30 -q -c "$RUNNER_TEMP/cache.tzst" | tar -xf - -C "$RUNNER_TEMP/x"; r archive-extract "$(awk "BEGIN{printf \"%.1f\", $(date +%s.%N) - $s}")"
