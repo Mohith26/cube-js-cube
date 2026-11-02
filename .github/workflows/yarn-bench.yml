@@ -57,6 +57,7 @@ jobs:
           rm -rf "$CACHE"; mkdir -p "$RUNNER_TEMP/x"
           s=$(date +%s.%N); zstd -d --long=30 -q -c "$RUNNER_TEMP/cache.tzst" | tar -xf - -C "$RUNNER_TEMP/x"; r archive-extract "$(awk "BEGIN{printf \"%.1f\", $(date +%s.%N) - $s}")"
           # What a real CI job sees: a fresh global folder holding only the cache restored from the archive
-          rm -rf "$(dirname "$CACHE")"; mkdir -p "$(dirname "$CACHE")"; mv "$RUNNER_TEMP/x/$(basename "$CACHE")" "$CACHE"
+          if [ "$PM" = yarn4 ]; then rm -rf "$YARN_GLOBAL_FOLDER"; fi
+          mkdir -p "$(dirname "$CACHE")"; mv "$RUNNER_TEMP/x/$(basename "$CACHE")" "$CACHE"
           clean; r ci-like-noscripts "$(t noscripts)"; phases ci-like-noscripts
           clean; r ci-like-full "$(t full)"; phases ci-like-full
